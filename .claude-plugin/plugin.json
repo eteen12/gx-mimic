@@ -1,0 +1,14 @@
+{
+  "name": "gx-mimic",
+  "displayName": "GX Mimic",
+  "version": "0.1.0",
+  "description": "Finds guitar-only reference audio and builds matching Guitarix presets through an agent-driven loop.",
+  "author": {
+    "name": "Ethan Breitkreutz"
+  },
+  "license": "MIT",
+  "keywords": ["guitarix", "guitar", "tone", "amp-sim", "linux", "audio"],
+  "skills": "./skills/",
+  "commands": ["./commands/"],
+  "mcpServers": "./.mcp.json"
+}
