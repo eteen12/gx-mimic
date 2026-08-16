@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Bootstrap for the gx-mimic CLI. Same resolution logic as bin/gx-mimic-mcp,
+# but execs the CLI entry point instead of the MCP server. After a fresh
+# install, run this once (e.g. `gx-mimic doctor`) to warm the venv outside
+# of any MCP client's startup timeout.
+set -euo pipefail
+
+resolve_uv() {
+    if command -v uv >/dev/null 2>&1; then
+        command -v uv
+        return 0
+    fi
+    for candidate in "$HOME/.local/bin/uv" "$HOME/.cargo/bin/uv"; do
+        if [ -x "$candidate" ]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+UV_BIN="$(resolve_uv || true)"
+if [ -z "${UV_BIN:-}" ]; then
+    echo "gx-mimic: uv not found on PATH, ~/.local/bin, or ~/.cargo/bin -- install uv (https://docs.astral.sh/uv/)" >&2
+    exit 3
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CLAUDE_PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+GX_MIMIC_HOME="${GX_MIMIC_HOME:-$HOME/.local/state/gx-mimic}"
+
+export UV_PROJECT_ENVIRONMENT="${GX_MIMIC_HOME}/venv"
+
+mkdir -p "$GX_MIMIC_HOME/logs"
+READY_MARKER="${UV_PROJECT_ENVIRONMENT}/.gx-ready"
+
+if [ ! -f "$READY_MARKER" ]; then
+    {
+        echo "=== gx-mimic bootstrap: $(date -u +%FT%TZ) ==="
+        "$UV_BIN" sync --frozen --project "$CLAUDE_PLUGIN_ROOT"
+    } >>"$GX_MIMIC_HOME/logs/bootstrap.log" 2>&1
+    mkdir -p "$UV_PROJECT_ENVIRONMENT"
+    touch "$READY_MARKER"
+fi
+
+exec "$UV_BIN" run --frozen --project "$CLAUDE_PLUGIN_ROOT" python -m gxmimic.cli "$@"

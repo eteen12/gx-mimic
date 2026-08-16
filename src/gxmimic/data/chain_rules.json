@@ -1,0 +1,50 @@
+{
+  "schema": "gx-mimic/chain_rules/1",
+  "_comment": "Top-down, first-match rule lists per design-contract.md section 3 'Model selection'. Each rule's `when` is a dict of {field: [op, arg]}; an empty `when` always matches (used as the final fallback in each list). `field` reads from the evaluation context: gain_class, brightness_hz, scoop_index_db, warmth_ratio_db, presence_ratio, fizz_ratio, tightness, rolloff85_hz, bands.low.",
+
+  "tonestack_rules": {
+    "clean": [
+      { "when": { "brightness_hz": [">=", 2000], "scoop_index_db": [">=", 2] }, "select": "Twin Reverb" },
+      { "when": { "brightness_hz": [">=", 1800], "scoop_index_db": ["<", 2] }, "select": "AC-30" },
+      { "when": { "brightness_hz": ["<", 1800] }, "select": "Princeton" },
+      { "when": { "bands.low": [">=", 0.38] }, "select": "Bassman" },
+      { "when": {}, "select": "Princeton" }
+    ],
+    "crunch": [
+      { "when": { "scoop_index_db": ["<=", -1] }, "select": "JTM-45" },
+      { "when": { "brightness_hz": [">=", 2300] }, "select": "JCM-800" },
+      { "when": { "presence_ratio": [">=", 0.14], "scoop_index_db": [">", -1] }, "select": "AC-30" },
+      { "when": {}, "select": "Bassman" }
+    ],
+    "high_gain": [
+      { "when": { "scoop_index_db": [">=", 3] }, "select": "Mesa Boogie" },
+      { "when": { "brightness_hz": [">=", 2600], "tightness": [">=", 0.6] }, "select": "Engl" },
+      { "when": { "scoop_index_db": ["<=", -1] }, "select": "SOL 100" },
+      { "when": {}, "select": "JCM-2000" }
+    ],
+    "extreme": [
+      { "when": { "scoop_index_db": [">=", 2] }, "select": "Mesa Boogie" },
+      { "when": {}, "select": "Engl" }
+    ]
+  },
+
+  "cab_rules": [
+    { "when": { "gain_class": ["in", ["high_gain", "extreme"]], "fizz_ratio": ["<=", 0.05] }, "select": "HighGain" },
+    { "when": { "gain_class": ["in", ["high_gain", "extreme"]], "scoop_index_db": [">=", 2] }, "select": "Mesa Boogie" },
+    { "when": { "gain_class": ["==", "crunch"], "brightness_hz": [">=", 2200] }, "select": "Marshall" },
+    { "when": { "gain_class": ["==", "crunch"] }, "select": "4x12" },
+    { "when": { "gain_class": ["==", "clean"], "brightness_hz": [">=", 2000] }, "select": "Twin" },
+    { "when": { "gain_class": ["==", "clean"], "bands.low": [">=", 0.36] }, "select": "Bassman" },
+    { "when": { "gain_class": ["==", "clean"] }, "select": "Princeton" },
+    { "when": { "rolloff85_hz": ["<=", 4500] }, "select": "2x12" },
+    { "when": {}, "select": "4x12" }
+  ],
+
+  "tonestack_prior": {
+    "bass":   { "base": 0.5, "coef": 1.6,  "ref": 0.30, "field": "bands.low",        "lo": 0.15, "hi": 0.90 },
+    "middle": { "base": 0.5, "coef": -0.09, "ref": 0.0,  "field": "scoop_index_db",   "lo": 0.15, "hi": 0.95 },
+    "treble": { "base": 0.5, "coef": 0.000333333333, "ref": 1800, "field": "brightness_hz", "lo": 0.15, "hi": 0.92 }
+  },
+
+  "reverb_rt60_threshold_s": 0.25
+}

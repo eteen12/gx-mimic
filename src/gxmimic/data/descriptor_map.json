@@ -1,0 +1,159 @@
+{
+  "schema": "gx-mimic/descriptor_map/1",
+  "_comment": "Descriptor -> knob table, design-contract.md section 3. `notch_field` is where suggested_tweaks (dsp/score.py) reads the measured value from a fingerprint dict (dotted path into the fingerprint, or 'bands.low' for the bands ratio). `moves` is an ordered list of move-GROUPS; within a group the first entry is the PRIMARY knob -- when it saturates against its clamp, the unabsorbed notch budget (in notch units, not raw units) spills to the next group. Secondary knobs in a group move alongside the primary at the same (unspilled) notch count and don't themselves gate spillover. A move entry: {param, delta (per notch) | set (fixed value, notch-count-independent), clamp:[lo,hi] (null side = use the real param bound from gx/params.py), enable (aux bool param forced to 1 when this move fires), one_shot_enable (this move's own param is a bool forced to 1, consumes no budget), base_if_enabling (snap current value here the first time this knob activates)}.",
+
+  "descriptors": {
+    "brightness": {
+      "notch_field": "descriptors.brightness_hz",
+      "notch_size": 220,
+      "inverted": false,
+      "kind": "additive",
+      "moves": [
+        [{ "param": "amp.tonestack.Treble", "delta": 0.06, "clamp": [null, 0.95] }],
+        [{ "param": "cab.treble", "delta": 1.5, "clamp": [null, 8] }],
+        [{ "param": "eqs.fs4k", "delta": 1.0 }, { "param": "eqs.fs2k", "delta": 0.6 }]
+      ]
+    },
+    "darkness": { "alias_of": "brightness", "sign": -1 },
+
+    "presence": {
+      "notch_field": "descriptors.presence_ratio",
+      "notch_size": 0.02,
+      "inverted": false,
+      "kind": "additive",
+      "moves": [
+        [{ "param": "eqs.fs4k", "delta": 1.5 }, { "param": "eqs.fs2k", "delta": 0.7 }],
+        [{ "param": "cab.treble", "delta": 1.0, "clamp": [null, 8] }],
+        [{ "param": "amp.tonestack.Treble", "delta": 0.03, "clamp": [null, 0.95] }]
+      ]
+    },
+
+    "fizz": {
+      "notch_field": "descriptors.fizz_ratio",
+      "notch_size": 0.015,
+      "inverted": false,
+      "kind": "fizz",
+      "negative_moves": [
+        { "param": "eqs.fs8k", "delta": -2.0 },
+        { "param": "eqs.fs16k", "delta": -2.0 },
+        { "param": "antyfizz.on_off", "one_shot_enable": true },
+        { "param": "low_high_pass.lhp.low_freq", "delta": -500, "clamp": [3000, null], "enable": "low_highpass.on_off" }
+      ],
+      "positive_disable_first": "antyfizz.on_off"
+    },
+
+    "mids": {
+      "notch_field": "descriptors.scoop_index_db",
+      "notch_size": 1.5,
+      "inverted": true,
+      "kind": "additive",
+      "moves": [
+        [{ "param": "amp.tonestack.Middle", "delta": 0.07, "clamp": [null, 0.98] }],
+        [{ "param": "eqs.fs1k", "delta": 1.0 }, { "param": "eqs.fs500", "delta": 0.5 }]
+      ],
+      "structural": {
+        "direction": "positive",
+        "when_select_in": ["Mesa Boogie", "M2199", "Twin Reverb"],
+        "param": "amp.tonestack.select",
+        "suggest": "JCM-800",
+        "alt": "JTM-45"
+      }
+    },
+
+    "bass": {
+      "notch_field": "bands.low",
+      "notch_size": 0.035,
+      "inverted": false,
+      "kind": "additive",
+      "moves": [
+        [{ "param": "amp.tonestack.Bass", "delta": 0.06, "clamp": [null, 0.90] }],
+        [{ "param": "cab.bass", "delta": 1.0, "clamp": [null, 8] }],
+        [{ "param": "eqs.fs125", "delta": 1.0 }, { "param": "eqs.fs62_5", "delta": 0.6 }]
+      ],
+      "extra_if_le": {
+        "threshold": -2,
+        "enable": "low_highpass.on_off",
+        "param": "low_high_pass.lhc.low_freq",
+        "delta": 20,
+        "clamp": [null, 200]
+      }
+    },
+
+    "warmth": {
+      "notch_field": "descriptors.warmth_ratio_db",
+      "notch_size": 1.5,
+      "inverted": false,
+      "kind": "additive",
+      "moves": [
+        [{ "param": "amp.tonestack.Bass", "delta": 0.03, "clamp": [null, 0.90] }, { "param": "amp.tonestack.Middle", "delta": 0.04, "clamp": [null, 0.98] }],
+        [{ "param": "eqs.fs4k", "delta": -0.8 }, { "param": "eqs.fs8k", "delta": -0.8 }],
+        [{ "param": "cab.treble", "delta": -0.8, "clamp": [-10, null] }]
+      ]
+    },
+
+    "gain": {
+      "notch_field": "descriptors.gain_score",
+      "notch_size": 0.07,
+      "inverted": false,
+      "kind": "gain",
+      "drive_axis_delta_per_notch": 0.08,
+      "_comment": "amp.out_master compensation (~-1.2dB per +0.08 drive_axis, section 3 preamble) is already baked into data/drive_schedule.json's out_master column, so re-interpolating the schedule at the new axis is the entire compensation step -- no separate additive trim."
+    },
+
+    "tightness": {
+      "notch_field": "descriptors.tightness",
+      "notch_size": 0.10,
+      "inverted": false,
+      "kind": "additive",
+      "moves": [
+        [
+          { "param": "ts9sim.on_off", "one_shot_enable": true },
+          { "param": "ts9sim.drive", "delta": -0.05, "clamp": [0.05, null] },
+          { "param": "ts9sim.tone", "delta": 40, "clamp": [null, 900] }
+        ],
+        [
+          { "param": "expander.on_off", "one_shot_enable": true },
+          { "param": "expander.threshold", "delta": 2, "clamp": [-40, -24], "base_if_enabling": -40 },
+          { "param": "expander.attack", "set": 0.001 },
+          { "param": "expander.release", "set": 0.08 },
+          { "param": "expander.ratio", "set": 3 }
+        ],
+        [{ "param": "amp.tonestack.Bass", "delta": -0.04, "clamp": [0, null] }],
+        [{ "param": "low_high_pass.lhc.low_freq", "delta": 10, "clamp": [null, 200], "enable": "low_highpass.on_off" }]
+      ]
+    },
+
+    "reverb": {
+      "notch_field": "descriptors.rt60_s",
+      "notch_size": 0.15,
+      "inverted": false,
+      "kind": "reverb",
+      "bootstrap": {
+        "enable": "stereoverb.on_off",
+        "set": { "stereoverb.RoomSize": 0.30, "stereoverb.damp": 0.50, "stereoverb.wet_dry": 8 }
+      },
+      "increment_moves": [
+        [{ "param": "stereoverb.wet_dry", "delta": 6, "clamp": [null, 45] }],
+        [{ "param": "stereoverb.RoomSize", "delta": 0.05, "clamp": [null, 0.85] }]
+      ],
+      "auto_off_wet_dry_le": 2
+    },
+
+    "compression": {
+      "notch_field": "descriptors.crest_db",
+      "notch_size": 2.0,
+      "inverted": true,
+      "kind": "additive",
+      "moves": [
+        [
+          { "param": "compressor.on_off", "one_shot_enable": true },
+          { "param": "compressor.ratio", "delta": 1, "clamp": [null, 8] },
+          { "param": "compressor.threshold", "delta": -3, "clamp": [-30, null] },
+          { "param": "compressor.attack", "set": 0.005 },
+          { "param": "compressor.release", "set": 0.25 },
+          { "param": "compressor.knee", "set": 4 }
+        ]
+      ]
+    }
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "schema": "gx-mimic/probes/1",
+  "placeholder": true,
+  "generated_by": "tools/make_placeholder_probes.py",
+  "synthesis": "Karplus-Strong (numpy only)",
+  "seed": 42,
+  "sample_rate": 48000,
+  "note": "Synthetic DI clips, not real guitar recordings. Replace with real DI clips of the same name/nominal duration when available; bump sha256 and clear the placeholder flag.",
+  "files": {
+    "chord": {
+      "filename": "chord.wav",
+      "sha256": "c74f0a63b214a63bd08112f3754f0462fd58225120099eb2d4263ef03593a421",
+      "duration_s": 8.0,
+      "sample_rate": 48000,
+      "channels": 1,
+      "peak_dbfs": -6.000000953674316,
+      "placeholder": true
+    },
+    "chug": {
+      "filename": "chug.wav",
+      "sha256": "b639dac5871f4640d1e9bccf8179ce85cbb0c83e0005c009eba8c87c1a9dff10",
+      "duration_s": 6.0,
+      "sample_rate": 48000,
+      "channels": 1,
+      "peak_dbfs": -6.000000953674316,
+      "placeholder": true
+    },
+    "lead": {
+      "filename": "lead.wav",
+      "sha256": "5ede7f7f756117c63307bf697591ea8eb18803ffed8173eb1ef9b485641c50e7",
+      "duration_s": 6.0,
+      "sample_rate": 48000,
+      "channels": 1,
+      "peak_dbfs": -6.000000953674316,
+      "placeholder": true
+    }
+  }
+}

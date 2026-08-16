@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "gx-mimic": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/gx-mimic-mcp",
+      "env": {
+        "GX_MIMIC_HOME": "${CLAUDE_PLUGIN_DATA}",
+        "UV_PROJECT_ENVIRONMENT": "${CLAUDE_PLUGIN_DATA}/venv"
+      }
+    }
+  }
+}

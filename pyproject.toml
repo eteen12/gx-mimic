@@ -1,0 +1,33 @@
+[project]
+name = "gx-mimic"
+version = "0.1.0"
+description = "Match a Guitarix preset to a reference guitar tone by ear-informed measurement, not hand-tweaking."
+license = { text = "MIT" }
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.12",
+    "JACK-Client>=0.5.4",
+    "mcp>=1.2.0",
+]
+
+[project.scripts]
+gx-mimic = "gxmimic.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gxmimic"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "jack: tests that require a real (or dummy-driver) JACK server and guitarix; excluded from default CI (`pytest -m \"not jack\"`).",
+]
