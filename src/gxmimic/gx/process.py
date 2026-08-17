@@ -154,6 +154,7 @@ def launch_isolated_guitarix(
 
     try:
         _wait_for_ports(jack_name, timeout=15.0)
+        _connect_internal_routing(jack_name)
     except GxError:
         tail = proc.log_tail()
         proc.terminate()
@@ -179,6 +180,31 @@ def _wait_for_ports(jack_name: str, timeout: float = 15.0) -> None:
             last_err = e
         time.sleep(0.1)
     raise GxError("render", f"guitarix JACK ports not found within {timeout}s ({last_err})")
+
+
+def _connect_internal_routing(jack_name: str) -> None:
+    """`-J` disables ALL of guitarix's self-connection, including the
+    INTERNAL link between its two JACK clients (`<name>_amp` -- the mono
+    pedal/amp/tonestack/cab/eqs rack -- and `<name>_fx` -- the stereo
+    reverb rack). Verified empirically: with `-J`, `<name>_amp:out_0` is
+    NOT connected to `<name>_fx:in_0` on startup, so anything capturing
+    from `<name>_fx:out_*` (the only output ports guitarix exposes) reads
+    silence even though the mono rack is processing audio correctly on its
+    own `:out_0`. Since "-J = we own routing" (design-contract.md section
+    5), we are responsible for making this connection ourselves, once per
+    engine launch."""
+    import jack
+
+    amp_out = f"{jack_name}_amp:out_0"
+    fx_in = f"{jack_name}_fx:in_0"
+    c = jack.Client(f"gxmimic-routing-{os.getpid()}", no_start_server=True)
+    try:
+        try:
+            c.connect(amp_out, fx_in)
+        except jack.JackError:
+            pass  # already connected (e.g. re-entrant call) -- not fatal
+    finally:
+        c.close()
 
 
 def kill_stale(gx_mimic_home: Path, jack_name: str = DEFAULT_JACK_NAME) -> int:

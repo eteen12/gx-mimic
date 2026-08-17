@@ -43,7 +43,17 @@ def _capture_clip(client_name: str, jack_name: str, di: "np.ndarray", sr: int,
                    tail_s: float = 1.5) -> tuple["np.ndarray", int]:
     """Play `di` into `<jack_name>_amp:in_0`, capture `<jack_name>_fx:out_0`.
     Ported from ~/guitarix-tone-match/tone_test.py's JACK client pattern.
-    Returns (captured_samples, xrun_count)."""
+    Returns (captured_samples, xrun_count).
+
+    `tail_s` sizes the CAPTURE buffer/window only (safety margin so the
+    process callback never runs out of room and any signal path latency
+    doesn't get truncated) -- it is NOT extra content callers should keep.
+    Probe WAVs already bake their own ring-out tail into their nominal
+    duration (data/probes/manifest.json), so the returned array is trimmed
+    back down to `len(di)` before returning: otherwise every render's
+    reported duration would be `len(di) + tail_s` instead of matching the
+    source clip, which is exactly what design-contract.md/test_render_smoke
+    asserts against."""
     import jack
     import numpy as np
 
@@ -96,7 +106,8 @@ def _capture_clip(client_name: str, jack_name: str, di: "np.ndarray", sr: int,
         client.close()
 
     n = state["rec"]
-    return rec[:n].astype(np.float32), state["xruns"]
+    captured = rec[:n].astype(np.float32)
+    return captured[: len(di)], state["xruns"]
 
 
 def _establish_engine(job: dict) -> tuple["processmod.GxProcess", int, bool]:
@@ -116,6 +127,19 @@ def _establish_engine(job: dict) -> tuple["processmod.GxProcess", int, bool]:
     banks_dir = gx_dir / "banks"
     banks_dir.mkdir(parents=True, exist_ok=True)
 
+    # On a truly first-ever launch of a pristine isolated config tree,
+    # guitarix bootstraps its own default Scratchpad/livebuffer1 state and
+    # immediately SAVES it -- clobbering any bank/rc we pre-write below.
+    # Verified empirically: once the tree has been launched at least once,
+    # later writes-then-relaunch are honoured correctly, so a one-time
+    # throwaway "priming" launch (before our real write) is enough. This
+    # only costs anything on the very first render for a given
+    # $GX_MIMIC_HOME -- the rc file persists for all later renders.
+    rc_marker_path = gx_dir / f"{jack_name}_rc"
+    if not rc_marker_path.is_file():
+        priming = processmod.launch_isolated_guitarix(home, jack_name=jack_name)
+        priming.terminate()
+
     preset_name = preset.get("name", "gx-mimic-render")
     bank_name = "gx-mimic-work"
     bank = bankmod.single_preset_bank(preset_name, engine)
@@ -133,7 +157,17 @@ def _establish_engine(job: dict) -> tuple["processmod.GxProcess", int, bool]:
     banklist.insert(0, [bank_name, f"{bank_name}.gx", 0, 0, [1, 2], mtime])
     banklist_path.write_text(json.dumps(banklist))
 
-    rc_path = gx_dir / "gx_head_rc"
+    # Guitarix names its rc file after the JACK client name it was launched
+    # with (`-n <jack_name>` -> `<jack_name>_rc`), NOT a hardcoded
+    # `gx_head_rc` -- that literal name only applies to the default,
+    # un-renamed `gx_head` client (i.e. the real user's normal launch,
+    # which is what install.py/api.py correctly target in
+    # ~/.config/guitarix). Verified empirically: an isolated instance
+    # launched with `-n gx_mimic` creates/reads `gx_mimic_rc` and never
+    # touches a `gx_head_rc` file in its (isolated) XDG_CONFIG_HOME tree --
+    # writing to the wrong filename here silently made every render use
+    # guitarix's built-in blank default preset instead of ours.
+    rc_path = gx_dir / f"{jack_name}_rc"
     if rc_path.is_file():
         try:
             rc = bankmod.load_rc(rc_path)

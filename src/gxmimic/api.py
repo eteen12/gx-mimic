@@ -607,8 +607,210 @@ def probes_use(name: str, wav_path: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# calibrate (maintainer-only; needs live guitarix -- exercised in Phase 3)
+# calibrate (maintainer-only; needs live guitarix + JACK)
 # ---------------------------------------------------------------------------
+CALIB_EQS_BANDS_HZ = [31.25, 62.5, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
+CALIB_EQS_PARAM_IDS = [
+    "eqs.fs31_25", "eqs.fs62_5", "eqs.fs125", "eqs.fs250", "eqs.fs500",
+    "eqs.fs1k", "eqs.fs2k", "eqs.fs4k", "eqs.fs8k", "eqs.fs16k",
+]
+CALIB_EQS_GAIN_DB = 12.0
+CALIB_CAB_GAIN_DB = 8.0
+CALIB_DUR_S = 2.0
+
+
+def _pink_noise_burst(duration_s: float, sr: int = 48000, seed: int = 42, peak: float = 0.15) -> np.ndarray:
+    """Deterministic pink (1/f) noise burst for `calibrate`: equal energy
+    per octave, so every third-octave measurement band gets comparable SNR
+    (unlike white noise, which is octave-band-weak at low frequencies).
+    Shaped directly in the frequency domain (seeded phase + 1/sqrt(f)
+    magnitude) rather than a running filter, for exact reproducibility."""
+    n = int(duration_s * sr)
+    rng = np.random.default_rng(seed)
+    n_bins = n // 2 + 1
+    mag = np.ones(n_bins, dtype=np.float64)
+    freqs = np.fft.rfftfreq(n, d=1.0 / sr)
+    nonzero = freqs > 0
+    mag[nonzero] = 1.0 / np.sqrt(freqs[nonzero])
+    mag[~nonzero] = 0.0  # kill DC
+    phase = rng.uniform(0, 2 * np.pi, size=n_bins)
+    spectrum = mag * np.exp(1j * phase)
+    x = np.fft.irfft(spectrum, n=n)
+    x = x / (np.max(np.abs(x)) + 1e-12) * peak
+    # short raised-cosine fade in/out so onset/offset transients don't pollute the LTAS
+    fade_n = max(1, int(0.02 * sr))
+    fade = 0.5 * (1 - np.cos(np.linspace(0, np.pi, fade_n)))
+    x[:fade_n] *= fade
+    x[-fade_n:] *= fade[::-1]
+    return x.astype(np.float32)
+
+
+def _calib_preset(name: str, chain_mono: list[str], params: dict) -> dict:
+    return {
+        "schema": "gx-mimic/preset/1", "name": name,
+        "chain": {"mono": chain_mono, "stereo": []},
+        "models": {}, "drive_axis": 0.0, "params": params,
+        "rationale": [], "provenance": {"tool_version": TOOL_VERSION}, "warnings": [],
+    }
+
+
+def _calib_render(preset: dict, home: Path, jack_name: str, calib_dir: Path,
+                   noise_wav: Path, timeout_s: float = 60.0) -> dict:
+    """Render `preset` against the shared pink-noise burst and return its
+    LTAS third-octave curve (dB). Reuses the same job/render_worker
+    subprocess mechanism as `render()` (D10: JACK crash isolation)."""
+    ts = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    out_dir = calib_dir / "renders" / f"{preset['name']}-{ts}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    job = {
+        "gx_mimic_home": str(home),
+        "jack_name": jack_name,
+        "write_path": "file",
+        "preset": preset,
+        "clips": {"pink": str(noise_wav)},
+        "sample_rate": 48000,
+        "keep_alive": False,
+        "session_slug": "_calibrate",
+        "tool_version": TOOL_VERSION,
+        "out_dir": str(out_dir),
+        "result_path": str(out_dir / "result.json"),
+    }
+    job_path = out_dir / "job.json"
+    job_path.write_text(json.dumps(job, indent=2))
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "gxmimic.render_worker", str(job_path)],
+        capture_output=True, text=True, timeout=timeout_s,
+    )
+    result_path = Path(job["result_path"])
+    if not result_path.is_file():
+        raise GxError("render", f"calibrate render_worker produced no result for "
+                                 f"{preset['name']!r} (exit {proc.returncode}): {proc.stderr[-2000:]}")
+    result = json.loads(result_path.read_text())
+    if not result.get("ok"):
+        err = result.get("error") or {}
+        raise GxError(err.get("kind", "render"),
+                      f"calibrate case {preset['name']!r}: {err.get('message', 'render failed')}",
+                      hint=err.get("hint"))
+    wav_path = result["clips"]["pink"]["wav"]
+    fp = fpmod.analyze_file(wav_path, label="render")
+    return {"db": np.array(fp["ltas"]["third_octave"]["db"], dtype=float), "xruns": result["jack"]["xruns"]}
+
+
 def calibrate(target: str, home: Path, out: str | None = None) -> dict:
-    raise GxError("environment", f"calibrate {target!r} requires a live guitarix + JACK session",
-                  hint="this is a maintainer command; run it interactively once JACK is available")
+    if target != "eqs":
+        raise GxError("environment", f"calibrate {target!r} not implemented yet",
+                       hint="only `calibrate eqs` (the atlas `fit` solves against) is wired up so far")
+
+    home = Path(home)
+    sessionmod.ensure_home(home)
+    jackenvmod.ensure_jack(home, policy="auto")
+
+    t0 = time.time()
+    calib_dir = home / "cache" / "calib"
+    calib_dir.mkdir(parents=True, exist_ok=True)
+
+    noise = _pink_noise_burst(CALIB_DUR_S, sr=48000, seed=42, peak=0.15)
+    noise_wav = calib_dir / "pink_noise.wav"
+    dspio.write_wav_f32(noise_wav, noise, 48000)
+
+    from gxmimic.dsp.ltas import THIRD_OCTAVE_CENTERS
+    centers = np.array(THIRD_OCTAVE_CENTERS, dtype=float)
+
+    n_measurements = 0
+    warnings = []
+
+    # -- eqs bands: chain = ["eqs"] only, flat baseline vs one band boosted --
+    eqs_baseline_preset = _calib_preset("calib-eqs-baseline", ["eqs"], {})
+    eqs_baseline = _calib_render(eqs_baseline_preset, home, "gx_mimic", calib_dir, noise_wav)
+    n_measurements += 1
+    if eqs_baseline["xruns"] > 5:
+        warnings.append(f"eqs baseline: {eqs_baseline['xruns']} xruns")
+
+    eqs_shapes = np.zeros((len(centers), len(CALIB_EQS_PARAM_IDS)), dtype=float)
+    for i, (pid, hz) in enumerate(zip(CALIB_EQS_PARAM_IDS, CALIB_EQS_BANDS_HZ)):
+        preset = _calib_preset(f"calib-eqs-{pid}", ["eqs"], {pid: CALIB_EQS_GAIN_DB})
+        boosted = _calib_render(preset, home, "gx_mimic", calib_dir, noise_wav)
+        n_measurements += 1
+        if boosted["xruns"] > 5:
+            warnings.append(f"{pid}: {boosted['xruns']} xruns")
+        eqs_shapes[:, i] = (boosted["db"] - eqs_baseline["db"]) / CALIB_EQS_GAIN_DB
+
+    # -- cab bass/treble shelves: chain = ["cab"] only, fixed cab model, bass/treble zeroed baseline --
+    cab_baseline_preset = _calib_preset("calib-cab-baseline", ["cab"],
+                                         {"cab.bass": 0.0, "cab.treble": 0.0})
+    cab_baseline_preset["models"]["cab"] = "4x12"
+    cab_baseline = _calib_render(cab_baseline_preset, home, "gx_mimic", calib_dir, noise_wav)
+    n_measurements += 1
+    if cab_baseline["xruns"] > 5:
+        warnings.append(f"cab baseline: {cab_baseline['xruns']} xruns")
+
+    cab_bass_preset = _calib_preset("calib-cab-bass", ["cab"],
+                                     {"cab.bass": CALIB_CAB_GAIN_DB, "cab.treble": 0.0})
+    cab_bass_preset["models"]["cab"] = "4x12"
+    cab_bass_res = _calib_render(cab_bass_preset, home, "gx_mimic", calib_dir, noise_wav)
+    n_measurements += 1
+    cab_bass_shape = (cab_bass_res["db"] - cab_baseline["db"]) / CALIB_CAB_GAIN_DB
+
+    cab_treble_preset = _calib_preset("calib-cab-treble", ["cab"],
+                                       {"cab.bass": 0.0, "cab.treble": CALIB_CAB_GAIN_DB})
+    cab_treble_preset["models"]["cab"] = "4x12"
+    cab_treble_res = _calib_render(cab_treble_preset, home, "gx_mimic", calib_dir, noise_wav)
+    n_measurements += 1
+    cab_treble_shape = (cab_treble_res["db"] - cab_baseline["db"]) / CALIB_CAB_GAIN_DB
+
+    elapsed_s = time.time() - t0
+
+    # -- compare against whatever atlas was loaded before this run (usually
+    # the analytical placeholder) for a human-readable deviation report --
+    try:
+        old_atlas = fitmod.load_atlas()
+        old_eqs = old_atlas["eqs_shapes_db_per_db"]
+        old_analytical = bool(old_atlas["meta"].get("analytical", False))
+        max_dev_db = float(np.max(np.abs(eqs_shapes - old_eqs)))
+    except Exception:
+        old_analytical = None
+        max_dev_db = None
+
+    meta = {
+        "analytical": False,
+        "version": "v1",
+        "gx_version": "0.46.0",
+        "method": "measured: pink-noise burst (2s, seeded) through isolated live guitarix, "
+                  f"baseline vs +{CALIB_EQS_GAIN_DB}dB (eqs) / +{CALIB_CAB_GAIN_DB}dB (cab) per "
+                  "parameter, LTAS delta normalized per dB of gain",
+        "centers_hz": THIRD_OCTAVE_CENTERS,
+        "eqs_bands_hz": CALIB_EQS_BANDS_HZ,
+        "eqs_param_ids": CALIB_EQS_PARAM_IDS,
+        "measured_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "n_measurements": n_measurements,
+        "elapsed_s": elapsed_s,
+    }
+
+    out_path = Path(out) if out else (Path(__file__).resolve().parent / "data" / fitmod.ATLAS_FILE)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(
+        out_path,
+        centers_hz=centers,
+        eqs_bands_hz=np.array(CALIB_EQS_BANDS_HZ, dtype=float),
+        eqs_shapes_db_per_db=eqs_shapes,
+        cab_bass_shape_db_per_db=cab_bass_shape,
+        cab_treble_shape_db_per_db=cab_treble_shape,
+        meta_json=np.array(json.dumps(meta)),
+    )
+    fitmod.load_atlas.cache_clear()
+
+    return {
+        "schema": SCHEMA_CALIBRATE,
+        "target": target,
+        "out": str(out_path),
+        "n_measurements": n_measurements,
+        "elapsed_s": elapsed_s,
+        "eqs_bands_hz": CALIB_EQS_BANDS_HZ,
+        "eqs_peak_db_per_db": [float(np.max(np.abs(eqs_shapes[:, i]))) for i in range(len(CALIB_EQS_PARAM_IDS))],
+        "cab_bass_peak_db_per_db": float(np.max(np.abs(cab_bass_shape))),
+        "cab_treble_peak_db_per_db": float(np.max(np.abs(cab_treble_shape))),
+        "replaced_analytical_placeholder": old_analytical,
+        "max_deviation_from_previous_atlas_db": max_dev_db,
+        "warnings": warnings,
+    }

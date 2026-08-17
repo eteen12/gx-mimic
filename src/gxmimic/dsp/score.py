@@ -20,6 +20,10 @@ NORM_SPECTRAL_DB = 12.0
 NORM_GAIN = 0.35
 NORM_TIGHT = 0.50
 BARK_NORM_RANGE = (100.0, 10000.0)
+# Per-band deltas beyond this carry no tonal information (they occur where one
+# signal is near silence, e.g. between the harmonics of sparse material); clamp
+# before the RMS so silent-band noise cannot dominate the score.
+DELTA_CLAMP_DB = 18.0
 
 CONVERGE_MATCH = 85.0
 CONVERGE_RMS_DB = 1.5
@@ -153,7 +157,8 @@ def compute_score(target_fp: dict, render_fp: dict, weights: dict | None = None)
     floor = 0.05 * (w_raw.max() if w_raw.size else 1.0)
     weight = np.maximum(w_raw, floor)
 
-    spectral_rms_db = float(np.sqrt(np.sum(weight * delta ** 2) / np.sum(weight))) if weight.sum() > 0 else 0.0
+    delta_rms = np.clip(delta, -DELTA_CLAMP_DB, DELTA_CLAMP_DB)
+    spectral_rms_db = float(np.sqrt(np.sum(weight * delta_rms ** 2) / np.sum(weight))) if weight.sum() > 0 else 0.0
 
     gain_delta = target_fp["descriptors"]["gain_score"] - render_fp["descriptors"]["gain_score"]
     t_tight = target_fp["descriptors"].get("tightness")

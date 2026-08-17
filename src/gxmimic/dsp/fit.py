@@ -125,7 +125,27 @@ def solve_gains(centers: np.ndarray, error_db: np.ndarray, max_boost: float = BO
                  lam: float = 0.05, include_cab_eq: bool = False,
                  S: np.ndarray | None = None, param_ids: list[str] | None = None) -> dict:
     """Core numeric solve: min_g ||E - S g||^2 + lam ||g||^2, bounded, via
-    scipy.optimize.lsq_linear (ridge term folded in as extra rows)."""
+    scipy.optimize.lsq_linear (ridge term folded in as extra rows).
+
+    The ridge penalty is applied in COLUMN-NORMALIZED space, not raw gain
+    units. Reason: the shipped analytical placeholder atlas had every
+    column normalized to peak magnitude ~1.0 ("per dB of gain, response at
+    f0 == 1.0"), so a fixed `lam` regularized every parameter comparably.
+    The real, measured atlas (`gx-mimic calibrate eqs`, see
+    tools/build_eqs_atlas.py's docstring) has WILDLY different column
+    magnitudes -- eqs bands peak around 0.03-0.14 dB/dB (guitarix's `eqs`
+    bands run a very high default Q, so a third-octave-band LTAS measurement
+    only sees a diluted sliver of each band's true, much larger, narrowband
+    boost) vs cab.bass/treble shelves around 0.57-0.84 dB/dB. Against that
+    atlas, an un-normalized fixed ridge term over-shrinks the low-magnitude
+    eqs columns almost to zero (empirically: recovered gains near ~20% of
+    the true value even at negligible noise) while barely touching the
+    high-magnitude cab columns -- not a noise/SNR effect, a scale artifact
+    of mixing lam's fixed absolute strength with heterogeneous column
+    norms. Normalizing each column to unit peak magnitude before solving,
+    then dividing the recovered coefficients back by that same per-column
+    scale, makes `lam` regularize every parameter by the same RELATIVE
+    amount regardless of its raw physical effectiveness."""
     if S is None or param_ids is None:
         atlas_centers, S, param_ids = atlas_matrix(include_cab_eq)
         if not np.allclose(atlas_centers, centers):
@@ -135,17 +155,21 @@ def solve_gains(centers: np.ndarray, error_db: np.ndarray, max_boost: float = BO
     # Derive bounds from the actual column count (self-consistent even if a
     # caller passes an explicit S/param_ids without also flipping
     # include_cab_eq) rather than trusting include_cab_eq alone.
-    lower = [-max_boost] * len(EQS_PARAM_IDS)
-    upper = [max_boost] * len(EQS_PARAM_IDS)
+    lower = np.array([-max_boost] * len(EQS_PARAM_IDS))
+    upper = np.array([max_boost] * len(EQS_PARAM_IDS))
     if n_params > len(EQS_PARAM_IDS):
-        lower += [CAB_LO] * (n_params - len(EQS_PARAM_IDS))
-        upper += [CAB_HI] * (n_params - len(EQS_PARAM_IDS))
+        lower = np.concatenate([lower, [CAB_LO] * (n_params - len(EQS_PARAM_IDS))])
+        upper = np.concatenate([upper, [CAB_HI] * (n_params - len(EQS_PARAM_IDS))])
 
-    A = np.vstack([S, np.sqrt(lam) * np.eye(n_params)])
+    col_scale = np.max(np.abs(S), axis=0)
+    col_scale = np.where(col_scale > 1e-9, col_scale, 1.0)  # dead/all-zero column guard
+    S_norm = S / col_scale
+
+    A = np.vstack([S_norm, np.sqrt(lam) * np.eye(n_params)])
     b = np.concatenate([error_db, np.zeros(n_params)])
 
-    res = lsq_linear(A, b, bounds=(lower, upper), method="bvls")
-    gains = res.x
+    res = lsq_linear(A, b, bounds=(lower * col_scale, upper * col_scale), method="bvls")
+    gains = res.x / col_scale
     achieved = S @ gains
     residual = error_db - achieved
 

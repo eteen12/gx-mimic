@@ -19,7 +19,17 @@ def test_recovers_known_combination_within_tolerance():
     true_gains[param_ids.index("eqs.fs4k")] = -3.5
 
     clean = S @ true_gains
-    noisy = clean + rng.normal(0, 0.3, size=clean.shape)
+    # Noise floor scaled to the measured atlas (gx-mimic calibrate eqs
+    # replaced the analytical placeholder -- see atlas-eqs-v1.npz meta):
+    # eqs band columns now peak around 0.03-0.14 dB/dB (guitarix's `eqs`
+    # bands run a high default Q, so a third-octave LTAS measurement only
+    # sees a diluted sliver of the true narrowband boost), not the
+    # placeholder's near-unity normalization. A 5dB gain at fs1k now only
+    # moves the measured curve by ~0.5dB at its own band, so 0.3dB of
+    # injected noise (appropriate against a ~1.0-peak atlas) would swamp
+    # the real signal outright; 0.03dB keeps a comparable SNR to what this
+    # test originally exercised.
+    noisy = clean + rng.normal(0, 0.03, size=clean.shape)
 
     result = fitmod.solve_gains(centers, noisy, max_boost=12.0, lam=0.05, S=S, param_ids=param_ids)
     recovered = dict(zip(result["param_ids"], result["gains"]))
@@ -85,5 +95,7 @@ def test_solve_eq_end_to_end_smoke():
     result = fitmod.solve_eq(target_fp, render_fp)
     assert result["schema"] == fitmod.SCHEMA_FIT
     assert set(result["solved"].keys()) == set(fitmod.EQS_PARAM_IDS)
-    assert result["note"] is not None  # atlas is the analytical placeholder
+    # atlas-eqs-v1.npz is now a measured atlas (gx-mimic calibrate eqs), not
+    # the analytical placeholder, so solve_eq's placeholder warning is gone.
+    assert result["note"] is None
     assert result["residual_rms_db"] == pytest.approx(0.0, abs=1e-6)

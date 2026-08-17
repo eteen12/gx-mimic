@@ -9,7 +9,17 @@ from __future__ import annotations
 
 import itertools
 import json
+import re
 import socket
+
+# Verified on the installed 0.46.0+dfsg-1 build: the `set` method's RPC
+# response is malformed JSON -- `{"jsonrpc": "2.0","id": "1","result": }\n`
+# (no value token at all, not even `null`) -- regardless of parameter type.
+# This is on top of `set` being a silent no-op (the state genuinely never
+# changes; confirmed by `get` immediately after). Patch the empty result
+# slot to `null` before parsing so callers get a clean (if no-op) response
+# instead of a JSONDecodeError.
+_EMPTY_RESULT_RE = re.compile(rb'"result"\s*:\s*}')
 
 
 class RpcError(Exception):
@@ -73,6 +83,7 @@ class RpcClient:
         raw = self._rfile.readline()
         if not raw:
             raise ConnectionError("guitarix RPC connection closed by peer")
+        raw = _EMPTY_RESULT_RE.sub(b'"result": null}', raw)
         resp = json.loads(raw.decode("utf-8"))
         if resp.get("error") is not None:
             e = resp["error"]
