@@ -50,6 +50,7 @@ Do not present any of the following as a reference candidate:
 - **Mislabeled "isolated" tracks** where vocals or drums actually bleed through — verify, don't trust the title.
 - **Under ~30 seconds of continuous guitar audio** — too short to judge a tone from.
 - **Low-bitrate audio** (roughly below 128kbps) — compression artifacts will corrupt any tone judgment made from it.
+- **Paid sources** — anything behind a paywall, premium membership, or purchase (multitrack shops commonly gate their stems this way; many also sell **re-recordings**, not the original — double reason to skip). Free sources only. Only mention a paid option, clearly labeled and never as a recommendation, if the entire free search and fallback ladder came up empty. Free-with-registration is fine if disclosed.
 
 ## Worked examples
 

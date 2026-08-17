@@ -60,6 +60,7 @@ Not everything a search turns up is usable. Consult `references/sources.md` in t
 - Audible vocals or drums bleeding into an otherwise-labeled "isolated" track — titles lie; see the verification step below.
 - Under about 30 seconds of continuous guitar audio — too short to be useful as a reference.
 - Low-bitrate audio (roughly below 128kbps) — audible artifacts will corrupt tone judgments.
+- **Behind a paywall, membership, or purchase.** Free sources only, by default. Do not present paid options in the numbered list. The one exception: if you have found NO usable free option after working the full search list and fallback ladder, you may mention that a paid option exists — clearly labeled with its price/membership requirement, never as a recommendation — and let the user decide entirely on their own. Registration-required-but-free is acceptable, but say so up front.
 
 ## 5. Verify every candidate with WebFetch — never trust the snippet
 
